@@ -16,8 +16,12 @@ export class ArticleCacheService {
 
   constructor(private readonly metricsService: MetricsService) {}
 
-  private createCacheKey(category: NewsCategory, sourceId?: string): string {
-    return `${category}${sourceId ? `:${sourceId}` : ''}`;
+  private createCacheKey(
+    category: NewsCategory,
+    sourceId?: string,
+    enrichmentStatus: 'pending' | 'completed' = 'completed',
+  ): string {
+    return `${category}${sourceId ? `:${sourceId}` : ''}:${enrichmentStatus}`;
   }
 
   setCached(
@@ -25,17 +29,25 @@ export class ArticleCacheService {
     data: ArticleResponse,
     sourceId?: string,
   ): void {
-    const key = this.createCacheKey(category, sourceId);
-    this.cache.set(key, {
-      data,
-      timestamp: Date.now(),
-    });
-    this.logger.debug(`Cached articles for ${key}`);
-    this.metricsService.incrementCacheHits(category);
+    if (
+      data.articles.every(
+        (article) =>
+          article.enrichmentStatus === 'completed' ||
+          article.enrichmentStatus === 'failed',
+      )
+    ) {
+      const key = this.createCacheKey(category, sourceId, 'completed');
+      this.cache.set(key, {
+        data,
+        timestamp: Date.now(),
+      });
+      this.logger.debug(`Cached completed articles for ${key}`);
+      this.metricsService.incrementCacheHits(category);
+    }
   }
 
   getCached(category: NewsCategory, sourceId?: string): ArticleResponse | null {
-    const key = this.createCacheKey(category, sourceId);
+    const key = this.createCacheKey(category, sourceId, 'completed');
     const cached = this.cache.get(key);
     const now = Date.now();
 

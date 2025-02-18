@@ -2,12 +2,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ArticleService } from '../../article/article.service';
 import { ArticleCacheService } from '../../article/services/article-cache.service';
 import { ArticleEnrichmentService } from '../../article/services/article-enrichment.service';
-import { OpenAIService } from '../../openai/openai.service';
 import { NewsCategory } from '../../interfaces/Categories';
-import { mockArticle } from '../test-utils';
 import { NewsSourceRegistry } from '../../news-sources/news-source.registry';
 import { ArticleQueueService } from '../../queue/article-queue.service';
 import { NewsSource } from '../../interfaces/news-source.interface';
+import { mockArticle } from '../test-utils';
 
 describe('Article Integration', () => {
   let moduleRef: TestingModule;
@@ -30,6 +29,17 @@ describe('Article Integration', () => {
           enrichmentStatus: 'completed',
         })),
       ),
+      getEnrichedArticle: jest.fn().mockImplementation((id) => ({
+        ...mockArticle,
+        id,
+        fake_title: 'Mocked Satirical Title',
+        enrichmentStatus: 'completed',
+      })),
+      getEnrichmentStatus: jest
+        .fn()
+        .mockImplementation(
+          (ids) => new Map(ids.map((id) => [id, 'completed'])),
+        ),
     };
 
     moduleRef = await Test.createTestingModule({
@@ -54,6 +64,7 @@ describe('Article Integration', () => {
           provide: ArticleQueueService,
           useValue: {
             onArticleEnriched: jest.fn(),
+            onArticleEnrichmentFailed: jest.fn(),
             addToQueue: jest.fn(),
           },
         },

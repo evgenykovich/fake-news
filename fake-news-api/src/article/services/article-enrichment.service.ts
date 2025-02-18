@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { OpenAIService } from '../../openai/openai.service';
 import { ArticleQueueService } from '../../queue/article-queue.service';
 import { EnrichmentException } from '../exceptions/enrichment.exception';
 import { Article } from '../../interfaces/Article';
@@ -11,12 +10,20 @@ export class ArticleEnrichmentService {
   private readonly logger = new Logger(ArticleEnrichmentService.name);
   private enrichedArticles = new Map<string, Article>();
 
-  constructor(
-    private readonly openAIService: OpenAIService,
-    private readonly queueService: ArticleQueueService,
-  ) {
+  constructor(private readonly queueService: ArticleQueueService) {
     this.queueService.onArticleEnriched((article: Article) => {
+      this.logger.debug(
+        `Received enriched article ${article.id}: ${article.fake_title}`,
+      );
       this.enrichedArticles.set(article.id, article);
+    });
+
+    this.queueService.onArticleEnrichmentFailed((article: Article) => {
+      this.logger.debug(`Received failed article ${article.id}`);
+      this.enrichedArticles.set(article.id, {
+        ...article,
+        enrichmentStatus: 'failed',
+      });
     });
   }
 
@@ -27,47 +34,42 @@ export class ArticleEnrichmentService {
         return cached;
       }
 
-      const enriched = await this.openAIService.enrichArticle(article);
+      await this.queueService.addToQueue([article]);
 
-      const enrichedArticle: Article = {
+      return {
         ...article,
-        enrichmentStatus: 'completed' as EnrichmentStatus,
-        fake_title: enriched.fake_title,
+        enrichmentStatus: 'pending',
       };
-
-      this.enrichedArticles.set(article.id, enrichedArticle);
-      return enrichedArticle;
     } catch (error) {
       this.logger.error(`Failed to enrich article: ${error.message}`);
-      const failedArticle: Article = {
-        ...article,
-        enrichmentStatus: 'failed' as EnrichmentStatus,
-      };
-      this.enrichedArticles.set(article.id, failedArticle);
       throw new EnrichmentException(error.message);
     }
   }
 
   async enrichArticles(articles: Article[]): Promise<Article[]> {
     try {
-      const results = await Promise.all(
-        articles.map(async (article) => {
-          const cached = this.enrichedArticles.get(article.id);
-          if (cached) {
-            return cached;
-          }
+      if (articles.length === 0) {
+        return [];
+      }
 
-          const enriched = await this.openAIService.enrichArticle(article);
-          const enrichedArticle: Article = {
-            ...article,
-            enrichmentStatus: 'completed' as EnrichmentStatus,
-            fake_title: enriched.fake_title,
-          };
+      const results = articles.map((article) => {
+        const cached = this.enrichedArticles.get(article.id);
+        if (cached) {
+          return cached;
+        }
+        return {
+          ...article,
+          enrichmentStatus: 'pending' as const,
+        };
+      });
 
-          this.enrichedArticles.set(article.id, enrichedArticle);
-          return enrichedArticle;
-        }),
+      const nonCachedArticles = articles.filter(
+        (article) => !this.enrichedArticles.has(article.id),
       );
+
+      if (nonCachedArticles.length > 0) {
+        await this.queueService.addToQueue(nonCachedArticles);
+      }
 
       return results;
     } catch (error) {
@@ -77,7 +79,11 @@ export class ArticleEnrichmentService {
   }
 
   getEnrichedArticle(articleId: string): Article | undefined {
-    return this.enrichedArticles.get(articleId);
+    const article = this.enrichedArticles.get(articleId);
+    this.logger.debug(
+      `Getting enriched article ${articleId}: ${article?.fake_title || 'not found'}`,
+    );
+    return article;
   }
 
   async getEnrichmentStatus(

@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ArticleService } from './article.service';
 import { ArticleCacheService } from './services/article-cache.service';
-import { ArticleFetchService } from './services/article-fetch.service';
 import { ArticleEnrichmentService } from './services/article-enrichment.service';
 import { NewsSourceRegistry } from '../news-sources/news-source.registry';
 import { ArticleNotFoundException } from './exceptions/article-not-found.exception';
@@ -11,11 +10,16 @@ import { NewsCategory } from '../interfaces/Categories';
 describe('ArticleService', () => {
   let service: ArticleService;
   let cacheService: ArticleCacheService;
-  let fetchService: ArticleFetchService;
   let enrichmentService: ArticleEnrichmentService;
   let newsSourceRegistry: NewsSourceRegistry;
 
   beforeEach(async () => {
+    const mockEnrichmentService = {
+      enrichArticles: jest.fn(),
+      getEnrichedArticle: jest.fn(),
+      getEnrichmentStatus: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ArticleService,
@@ -35,9 +39,7 @@ describe('ArticleService', () => {
         },
         {
           provide: ArticleEnrichmentService,
-          useValue: {
-            enrichArticles: jest.fn(),
-          },
+          useValue: mockEnrichmentService,
         },
       ],
     }).compile();
@@ -90,6 +92,12 @@ describe('ArticleService', () => {
       jest
         .spyOn(enrichmentService, 'enrichArticles')
         .mockResolvedValue([mockEnrichedArticle]);
+      jest
+        .spyOn(enrichmentService, 'getEnrichmentStatus')
+        .mockResolvedValue(new Map([['0', 'completed']]));
+      jest
+        .spyOn(enrichmentService, 'getEnrichedArticle')
+        .mockReturnValue(mockEnrichedArticle);
 
       const result = await service.getAllArticles(
         NewsCategory.GENERAL,
@@ -140,6 +148,12 @@ describe('ArticleService', () => {
       jest
         .spyOn(enrichmentService, 'enrichArticles')
         .mockResolvedValue([mockEnrichedArticle]);
+      jest
+        .spyOn(enrichmentService, 'getEnrichmentStatus')
+        .mockResolvedValue(new Map([['0', 'completed']]));
+      jest
+        .spyOn(enrichmentService, 'getEnrichedArticle')
+        .mockReturnValue(mockEnrichedArticle);
 
       const result = await service.getAllArticles(NewsCategory.GENERAL);
 

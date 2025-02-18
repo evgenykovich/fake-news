@@ -36,10 +36,18 @@ describe('ArticleCacheService', () => {
     });
 
     it('should store and retrieve cached data', () => {
-      service.setCached(NewsCategory.GENERAL, mockArticleResponse);
+      const enrichedResponse = {
+        ...mockArticleResponse,
+        articles: mockArticleResponse.articles.map((article) => ({
+          ...article,
+          enrichmentStatus: 'completed' as const,
+        })),
+      };
+
+      service.setCached(NewsCategory.GENERAL, enrichedResponse);
       const result = service.getCached(NewsCategory.GENERAL);
 
-      expect(result).toEqual(mockArticleResponse);
+      expect(result).toEqual(enrichedResponse);
       expect(mockMetricsService.incrementCacheHits).toHaveBeenCalledWith(
         NewsCategory.GENERAL,
       );
@@ -47,28 +55,40 @@ describe('ArticleCacheService', () => {
 
     it('should handle source-specific caching', () => {
       const sourceId = 'test-source';
-      service.setCached(NewsCategory.GENERAL, mockArticleResponse, sourceId);
+      const enrichedResponse = {
+        ...mockArticleResponse,
+        articles: mockArticleResponse.articles.map((article) => ({
+          ...article,
+          enrichmentStatus: 'completed' as const,
+        })),
+      };
 
-      // Should return data for correct source
+      service.setCached(NewsCategory.GENERAL, enrichedResponse, sourceId);
+
       expect(service.getCached(NewsCategory.GENERAL, sourceId)).toEqual(
-        mockArticleResponse,
+        enrichedResponse,
       );
 
-      // Should return null for same category but different source
       expect(
         service.getCached(NewsCategory.GENERAL, 'different-source'),
       ).toBeNull();
 
-      // Should return null for same category without source
       expect(service.getCached(NewsCategory.GENERAL)).toBeNull();
     });
 
     it('should return null for expired cache', async () => {
-      service.setCached(NewsCategory.GENERAL, mockArticleResponse);
+      const enrichedResponse = {
+        ...mockArticleResponse,
+        articles: mockArticleResponse.articles.map((article) => ({
+          ...article,
+          enrichmentStatus: 'completed' as const,
+        })),
+      };
 
-      // Mock Date.now() to simulate cache expiration
+      service.setCached(NewsCategory.GENERAL, enrichedResponse);
+
       const originalNow = Date.now;
-      Date.now = jest.fn(() => originalNow() + 300001); // Just over 5 minutes later
+      Date.now = jest.fn(() => originalNow() + 300001);
 
       const result = service.getCached(NewsCategory.GENERAL);
       expect(result).toBeNull();
@@ -76,26 +96,42 @@ describe('ArticleCacheService', () => {
         NewsCategory.GENERAL,
       );
 
-      Date.now = originalNow; // Restore original Date.now
+      Date.now = originalNow;
     });
 
     it('should properly clear cache', () => {
-      service.setCached(NewsCategory.GENERAL, mockArticleResponse);
-      service.setCached(NewsCategory.BUSINESS, mockArticleResponse);
+      const enrichedResponse = {
+        ...mockArticleResponse,
+        articles: mockArticleResponse.articles.map((article) => ({
+          ...article,
+          enrichmentStatus: 'completed' as const,
+        })),
+      };
+
+      service.setCached(NewsCategory.GENERAL, enrichedResponse);
+      service.setCached(NewsCategory.BUSINESS, enrichedResponse);
 
       service.clearCategoryCache(NewsCategory.GENERAL);
       expect(service.getCached(NewsCategory.GENERAL)).toBeNull();
       expect(service.getCached(NewsCategory.BUSINESS)).not.toBeNull();
 
-      service.clearCache(); // Full cache clear
+      service.clearCache();
       expect(service.getCached(NewsCategory.BUSINESS)).toBeNull();
     });
 
     it('should clear all entries for a category including source-specific ones', () => {
-      service.setCached(NewsCategory.GENERAL, mockArticleResponse);
-      service.setCached(NewsCategory.GENERAL, mockArticleResponse, 'source1');
-      service.setCached(NewsCategory.GENERAL, mockArticleResponse, 'source2');
-      service.setCached(NewsCategory.BUSINESS, mockArticleResponse);
+      const enrichedResponse = {
+        ...mockArticleResponse,
+        articles: mockArticleResponse.articles.map((article) => ({
+          ...article,
+          enrichmentStatus: 'completed' as const,
+        })),
+      };
+
+      service.setCached(NewsCategory.GENERAL, enrichedResponse);
+      service.setCached(NewsCategory.GENERAL, enrichedResponse, 'source1');
+      service.setCached(NewsCategory.GENERAL, enrichedResponse, 'source2');
+      service.setCached(NewsCategory.BUSINESS, enrichedResponse);
 
       service.clearCategoryCache(NewsCategory.GENERAL);
 

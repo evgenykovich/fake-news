@@ -10,6 +10,8 @@ import { ArticleNotFoundException } from './exceptions/article-not-found.excepti
 @Injectable()
 export class ArticleService implements IArticleService {
   private readonly logger = new Logger(ArticleService.name);
+  private readonly MAX_WAIT_TIME = 10000; // 10 seconds
+  private readonly POLL_INTERVAL = 500; // 0.5 seconds
 
   constructor(
     private readonly cacheService: ArticleCacheService,
@@ -48,14 +50,61 @@ export class ArticleService implements IArticleService {
         articles.articles,
       );
 
-      const enrichedResponse = {
+      const startTime = Date.now();
+      while (Date.now() - startTime < this.MAX_WAIT_TIME) {
+        const statuses = await this.enrichmentService.getEnrichmentStatus(
+          enrichedArticles.map((a) => a.id),
+        );
+
+        const allCompleted = Array.from(statuses.values()).every(
+          (status) => status === 'completed' || status === 'failed',
+        );
+
+        if (allCompleted) {
+          const finalArticles = enrichedArticles.map((article) => {
+            const enriched = this.enrichmentService.getEnrichedArticle(
+              article.id,
+            );
+            return enriched || article;
+          });
+
+          const enrichedResponse = {
+            ...articles,
+            articles: finalArticles,
+          };
+
+          this.cacheService.setCached(category, enrichedResponse, sourceId);
+
+          this.logger.debug(
+            `Returning ${finalArticles.length} enriched articles for ${category}`,
+          );
+
+          return enrichedResponse;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, this.POLL_INTERVAL));
+      }
+
+      this.logger.warn(
+        `Enrichment timeout reached for ${category}, returning partially enriched articles`,
+      );
+
+      const timeoutResponse: ArticleResponse = {
         ...articles,
-        articles: enrichedArticles,
+        articles: enrichedArticles.map((article) => {
+          const enriched = this.enrichmentService.getEnrichedArticle(
+            article.id,
+          );
+          return (
+            enriched || {
+              ...article,
+              enrichmentStatus: 'failed' as const,
+            }
+          );
+        }),
       };
 
-      this.cacheService.setCached(category, enrichedResponse, sourceId);
-
-      return enrichedResponse;
+      return timeoutResponse;
     } catch (error) {
       this.logger.error(`Failed to get articles: ${error.message}`);
       throw error;

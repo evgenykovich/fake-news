@@ -1,6 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ArticleEnrichmentService } from './article-enrichment.service';
-import { OpenAIService } from '../../openai/openai.service';
 import { ArticleQueueService } from '../../queue/article-queue.service';
 import { mockArticle } from '../../test/test-utils';
 import { EnrichmentException } from '../exceptions/enrichment.exception';
@@ -9,7 +8,6 @@ import { NewsCategory } from '../../interfaces/Categories';
 
 describe('ArticleEnrichmentService', () => {
   let service: ArticleEnrichmentService;
-  let openAIService: OpenAIService;
   let queueService: ArticleQueueService;
 
   const mockEnrichmentResult = {
@@ -24,26 +22,29 @@ describe('ArticleEnrichmentService', () => {
   };
 
   beforeEach(async () => {
+    const mockQueueService = {
+      addToQueue: jest.fn(),
+      onArticleEnriched: jest.fn((callback) => {
+        mockQueueService.enrichedCallback = callback;
+      }),
+      onArticleEnrichmentFailed: jest.fn((callback) => {
+        mockQueueService.failedCallback = callback;
+      }),
+      enrichedCallback: null as ((article: Article) => void) | null,
+      failedCallback: null as ((article: Article) => void) | null,
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ArticleEnrichmentService,
         {
-          provide: OpenAIService,
-          useValue: {
-            enrichArticle: jest.fn(),
-          },
-        },
-        {
           provide: ArticleQueueService,
-          useValue: {
-            onArticleEnriched: jest.fn(),
-          },
+          useValue: mockQueueService,
         },
       ],
     }).compile();
 
     service = module.get<ArticleEnrichmentService>(ArticleEnrichmentService);
-    openAIService = module.get<OpenAIService>(OpenAIService);
     queueService = module.get<ArticleQueueService>(ArticleQueueService);
   });
 
@@ -52,8 +53,9 @@ describe('ArticleEnrichmentService', () => {
       expect(service).toBeDefined();
     });
 
-    it('should initialize queue listener', () => {
+    it('should initialize queue listeners', () => {
       expect(queueService.onArticleEnriched).toHaveBeenCalled();
+      expect(queueService.onArticleEnrichmentFailed).toHaveBeenCalled();
     });
   });
 
@@ -64,38 +66,34 @@ describe('ArticleEnrichmentService', () => {
       const result = await service.enrichArticle(mockArticle);
 
       expect(result).toEqual(mockEnrichedArticle);
-      expect(openAIService.enrichArticle).not.toHaveBeenCalled();
+      expect(queueService.addToQueue).not.toHaveBeenCalled();
     });
 
-    it('should successfully enrich and cache a new article', async () => {
-      jest
-        .spyOn(openAIService, 'enrichArticle')
-        .mockResolvedValueOnce(mockEnrichmentResult);
-
+    it('should add article to queue and return pending status', async () => {
       const result = await service.enrichArticle(mockArticle);
 
-      expect(result).toEqual(mockEnrichedArticle);
-      expect(openAIService.enrichArticle).toHaveBeenCalledWith(mockArticle);
-      expect(service['enrichedArticles'].get(mockArticle.id)).toEqual(
-        mockEnrichedArticle,
-      );
+      expect(result).toEqual({
+        ...mockArticle,
+        enrichmentStatus: 'pending',
+      });
+      expect(queueService.addToQueue).toHaveBeenCalledWith([mockArticle]);
     });
 
-    it('should handle enrichment failure correctly', async () => {
-      const errorMessage = 'OpenAI Error';
-      jest
-        .spyOn(openAIService, 'enrichArticle')
-        .mockRejectedValueOnce(new Error(errorMessage));
+    it('should handle enrichment callbacks', async () => {
+      const mockQueueService = queueService as any;
+      mockQueueService.enrichedCallback(mockEnrichedArticle);
 
-      await expect(service.enrichArticle(mockArticle)).rejects.toThrow(
-        EnrichmentException,
-      );
+      const cachedArticle = service.getEnrichedArticle(mockArticle.id);
+      expect(cachedArticle).toEqual(mockEnrichedArticle);
 
-      const failedArticle = service['enrichedArticles'].get(mockArticle.id);
-      expect(failedArticle).toEqual({
+      const failedArticle = {
         ...mockArticle,
-        enrichmentStatus: 'failed',
-      });
+        enrichmentStatus: 'failed' as const,
+      };
+      mockQueueService.failedCallback(failedArticle);
+
+      const cachedFailedArticle = service.getEnrichedArticle(failedArticle.id);
+      expect(cachedFailedArticle).toEqual(failedArticle);
     });
   });
 
@@ -103,57 +101,35 @@ describe('ArticleEnrichmentService', () => {
     it('should enrich multiple articles', async () => {
       const articles = [mockArticle, { ...mockArticle, id: 'article2' }];
 
-      jest
-        .spyOn(openAIService, 'enrichArticle')
-        .mockResolvedValue(mockEnrichmentResult);
+      jest.clearAllMocks();
 
       const results = await service.enrichArticles(articles);
 
       expect(results).toHaveLength(2);
       results.forEach((result) => {
-        expect(result).toEqual({
-          ...mockArticle,
-          id: result.id,
-          enrichmentStatus: 'completed',
-          fake_title: mockEnrichmentResult.fake_title,
-        });
+        expect(result.enrichmentStatus).toBe('pending');
       });
-      expect(openAIService.enrichArticle).toHaveBeenCalledTimes(2);
+
+      expect(queueService.addToQueue).toHaveBeenCalledTimes(1);
+      expect(queueService.addToQueue).toHaveBeenCalledWith(articles);
     });
 
-    it('should use cached articles when available', async () => {
-      service['enrichedArticles'].set(mockArticle.id, mockEnrichedArticle);
+    it('should handle empty article array', async () => {
+      const results = await service.enrichArticles([]);
+
+      expect(results).toHaveLength(0);
+      expect(queueService.addToQueue).not.toHaveBeenCalled();
+    });
+
+    it('should handle enrichment errors', async () => {
       const articles = [mockArticle];
-
-      const results = await service.enrichArticles(articles);
-
-      expect(results[0]).toEqual(mockEnrichedArticle);
-      expect(openAIService.enrichArticle).not.toHaveBeenCalled();
-    });
-
-    it('should handle enrichment failure for multiple articles', async () => {
-      const articles = [mockArticle, { ...mockArticle, id: 'article2' }];
       jest
-        .spyOn(openAIService, 'enrichArticle')
-        .mockRejectedValueOnce(new Error('OpenAI Error'));
+        .spyOn(queueService, 'addToQueue')
+        .mockRejectedValue(new Error('Queue error'));
 
       await expect(service.enrichArticles(articles)).rejects.toThrow(
         EnrichmentException,
       );
-    });
-  });
-
-  describe('getEnrichedArticle', () => {
-    it('should return cached article if available', () => {
-      service['enrichedArticles'].set(mockArticle.id, mockEnrichedArticle);
-
-      const result = service.getEnrichedArticle(mockArticle.id);
-      expect(result).toEqual(mockEnrichedArticle);
-    });
-
-    it('should return undefined for non-existent article', () => {
-      const result = service.getEnrichedArticle('non-existent');
-      expect(result).toBeUndefined();
     });
   });
 
